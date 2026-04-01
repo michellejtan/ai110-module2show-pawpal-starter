@@ -6,7 +6,7 @@
 # No display or UI logic belongs here; this file is purely about data and behavior.
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Optional
 
 
@@ -28,15 +28,14 @@ class Task:
     priority: str                       # "low", "medium", or "high"
     due_time: str                       # e.g. "9:00 AM"
     completed: bool = False             # defaults to not completed
-    is_recurring: bool = False          # if True, task can be reset daily (e.g. feeding)
+    frequency: Optional[str] = None    # "daily", "weekly", or None for one-time tasks
+    due_date: Optional[date] = None    # calendar date the task is due (date object)
 
     def priority_value(self) -> int:
         """Return a numeric value for priority to enable sorting.
 
-        high   → 3
-        medium → 2
-        low    → 1
-        Defaults to 0 for any unrecognised priority string.
+        Returns:
+            3 for "high", 2 for "medium", 1 for "low", 0 for any unrecognised string.
         """
         mapping = {"high": 3, "medium": 2, "low": 1}
         return mapping.get(self.priority.lower(), 0)
@@ -45,13 +44,51 @@ class Task:
         """Set completed to True when the user finishes the task."""
         self.completed = True
 
-    def reset(self) -> None:
-        """Set completed back to False for recurring tasks (is_recurring == True).
-        Should only be called on tasks where is_recurring is True — e.g. daily
-        feeding or a morning walk. One-time tasks (is_recurring == False) should
-        not be reset.
+    def next_occurrence(self) -> "Task":
+        """Return a new Task representing the next scheduled occurrence of this task.
+
+        Uses Python's timedelta to calculate the next due_date accurately:
+        - "daily"  → due_date = today + 1 day
+        - "weekly" → due_date = today + 7 days
+
+        The new task is identical to this one except completed is reset to False
+        and due_date is updated. Should only be called on tasks where frequency
+        is "daily" or "weekly".
+
+        Returns:
+            A new Task instance for the next occurrence, with completed=False.
+
+        Raises:
+            ValueError: if frequency is None (one-time tasks have no next occurrence).
         """
-        if self.is_recurring:
+        if self.frequency == "daily":
+            next_date = date.today() + timedelta(days=1)
+        elif self.frequency == "weekly":
+            next_date = date.today() + timedelta(days=7)
+        else:
+            raise ValueError(
+                f"Cannot create next occurrence for task '{self.title}': "
+                f"frequency is None (one-time task)."
+            )
+        return Task(
+            title=self.title,
+            task_type=self.task_type,
+            duration_minutes=self.duration_minutes,
+            priority=self.priority,
+            due_time=self.due_time,
+            completed=False,
+            frequency=self.frequency,
+            due_date=next_date,
+        )
+
+    def reset(self) -> None:
+        """Set completed back to False for recurring tasks only.
+
+        Should only be called on tasks where frequency is set — e.g. daily
+        feeding or a morning walk. One-time tasks (frequency == None) are
+        silently ignored.
+        """
+        if self.frequency is not None:
             self.completed = False
 
 
@@ -79,7 +116,10 @@ class Pet:
 
     def remove_task(self, task_title: str) -> None:
         """Remove a task from this pet's task list by title.
-        Does nothing if no task with that title is found.
+
+        Args:
+            task_title: the title of the task to remove. Does nothing if no
+                        task with that title is found.
         """
         self.tasks = [t for t in self.tasks if t.title != task_title]
 
@@ -89,8 +129,12 @@ class Pet:
 
     def get_pending_tasks(self) -> list[Task]:
         """Return only tasks where completed == False.
+
         This is what the Scheduler uses to build the daily plan —
         already-completed tasks are excluded automatically.
+
+        Returns:
+            A list of Task objects where completed is False.
         """
         return [task for task in self.tasks if not task.completed]
 
@@ -119,14 +163,23 @@ class Owner:
 
     def remove_pet(self, pet_name: str) -> None:
         """Remove a pet from the list by name.
-        Does nothing if no pet with that name is found.
+
+        Args:
+            pet_name: the name of the pet to remove. Does nothing if no pet
+                      with that name is found.
         """
         self.pets = [p for p in self.pets if p.name != pet_name]
 
     def find_pet(self, pet_name: str) -> Optional[Pet]:
         """Look up and return a Pet by name.
-        Returns None if no pet with that name is found.
+
         Used by the Scheduler to retrieve a specific pet's tasks.
+
+        Args:
+            pet_name: the name of the pet to search for.
+
+        Returns:
+            The matching Pet object, or None if no pet with that name is found.
         """
         for pet in self.pets:
             if pet.name == pet_name:
@@ -135,9 +188,13 @@ class Owner:
 
     def get_all_pending_tasks(self) -> list[Task]:
         """Return all incomplete tasks across every pet this owner has.
-        Loops through all pets, calls get_pending_tasks() on each,
-        and returns a single flat list. Useful for a full dashboard view
+
+        Loops through all pets and calls get_pending_tasks() on each,
+        returning a single flat list. Useful for a full dashboard view
         of everything that still needs to be done today.
+
+        Returns:
+            A flat list of Task objects where completed is False, across all pets.
         """
         pending = []
         for pet in self.pets:
@@ -166,10 +223,13 @@ class ScheduledTask:
     def summary(self) -> str:
         """Return one human-readable line describing this scheduled or skipped task.
 
-        Example (scheduled):
-            9:00 AM | Morning walk (20 min) [high] — Highest priority task.
-        Example (skipped):
-            SKIPPED | Enrichment play (30 min) [medium] — Not enough time remaining (5 min left).
+        Returns:
+            A formatted string with the start time (or SKIPPED), task title,
+            duration, priority, and scheduling reason.
+
+        Example:
+            "9:00 AM | Morning walk (20 min) [high] — High priority task."
+            "SKIPPED | Enrichment play (30 min) [medium] — Not enough time remaining (5 min left)."
         """
         label = self.start_time if self.start_time else "SKIPPED"
         return (
@@ -200,30 +260,86 @@ class Scheduler:
         return self.owner.available_minutes
 
     def get_tasks_by_pet(self, pet_name: str) -> list[Task]:
-        """Use owner.find_pet() to retrieve pending tasks for one specific pet.
-        Returns an empty list if the pet is not found.
+        """Retrieve pending tasks for one specific pet via owner.find_pet().
+
+        Args:
+            pet_name: the name of the pet whose pending tasks to retrieve.
+
+        Returns:
+            A list of pending Task objects for the pet, or an empty list if
+            the pet is not found.
         """
         pet = self.owner.find_pet(pet_name)
         if pet is None:
             return []
         return pet.get_pending_tasks()
 
+    def find_conflicts(self, pet_name: str) -> list[tuple[Task, Task]]:
+        """Detect tasks assigned to the same due_time for a given pet.
+
+        Scans pending tasks for the pet and collects any pair that shares an
+        identical due_time string. Returns a list of (task_a, task_b) pairs —
+        an empty list means no conflicts were found. Does not raise an exception
+        so the program keeps running regardless of what is found.
+
+        Args:
+            pet_name: name of the pet to check.
+
+        Returns:
+            A list of (task_a, task_b) tuples where both tasks share a due_time.
+            Empty list if no conflicts exist or the pet is not found.
+        """
+        tasks = self.get_tasks_by_pet(pet_name)
+        seen: dict[str, Task] = {}
+        conflicts: list[tuple[Task, Task]] = []
+        for task in tasks:
+            if task.due_time in seen:
+                conflicts.append((seen[task.due_time], task))
+            else:
+                seen[task.due_time] = task
+        return conflicts
+
+    def conflict_summary(self, pet_name: str) -> str:
+        """Return a human-readable warning string listing all due_time conflicts for a pet.
+
+        Calls find_conflicts() and formats the results into a printable message.
+        Returns an empty string when there are no conflicts, so callers can use
+        a simple truthiness check before printing.
+
+        Args:
+            pet_name: name of the pet to check.
+
+        Returns:
+            A formatted warning string listing each conflict, or an empty string
+            if no conflicts were detected.
+
+        Example output:
+            ⚠ Conflicts for Mochi:
+              'Give heartworm medication' and 'Weigh-in check' are both due at 9:00 AM
+        """
+        conflicts = self.find_conflicts(pet_name)
+        if not conflicts:
+            return ""
+        lines = [f"⚠ Conflicts for {pet_name}:"]
+        for a, b in conflicts:
+            lines.append(f"  '{a.title}' and '{b.title}' are both due at {a.due_time}")
+        return "\n".join(lines)
+
     def build_plan(self, pet_name: str, start_time: str = "8:00 AM") -> list[ScheduledTask]:
         """Build a prioritized daily plan for the given pet.
 
-        start_time is the earliest the owner is available. Tasks due before
-        start_time are skipped automatically. Among reachable tasks, budget is
-        allocated by priority (high tasks claim time first) so a later high-priority
-        task is never crowded out by an earlier low-priority one. Results are
-        displayed in due_time order so the output reads as a chronological day plan.
+        Tasks due before start_time are skipped. Among reachable tasks, the
+        time budget is allocated by priority (high first) so high-priority tasks
+        are never crowded out by lower-priority ones. Results are sorted by
+        due_time so the output reads as a chronological day plan.
 
-        Steps:
-        1. Fetch pending tasks via get_tasks_by_pet(pet_name)
-        2. Skip any task whose due_time is before start_time
-        3. Sort remaining tasks by priority_value() descending to allocate budget
-        4. Walk through priority-sorted tasks, marking each scheduled or skipped
-        5. Re-sort results by due_time ascending for chronological display
-        6. Return a list of ScheduledTask objects (scheduled + skipped)
+        Args:
+            pet_name:   name of the pet to build the plan for.
+            start_time: earliest time the owner is available (default "8:00 AM").
+
+        Returns:
+            A chronologically sorted list of ScheduledTask objects, each either
+            assigned a start time or marked as skipped with a reason.
         """
         tasks = self.get_tasks_by_pet(pet_name)
         if not tasks:
@@ -283,17 +399,116 @@ class Scheduler:
 
         return scheduled
 
+    def mark_task_complete(self, pet_name: str, task_title: str) -> Optional[Task]:
+        """Mark a task complete and automatically schedule its next occurrence.
+
+        Finds the first incomplete task matching task_title for the given pet,
+        marks it complete, then checks its frequency:
+        - "daily"  → creates a new Task due tomorrow (today + 1 day via timedelta)
+        - "weekly" → creates a new Task due next week (today + 7 days via timedelta)
+        - None     → one-time task; no new instance is created
+
+        The next occurrence is added directly to the pet's task list so it
+        appears in future plans without any extra steps.
+
+        Args:
+            pet_name:   Name of the pet whose task should be marked complete.
+            task_title: Title of the task to mark complete.
+
+        Returns:
+            The newly created Task for the next occurrence, or None if the task
+            is one-time or if the pet / task could not be found.
+        """
+        pet = self.owner.find_pet(pet_name)
+        if pet is None:
+            return None
+
+        for task in pet.tasks:
+            if task.title == task_title and not task.completed:
+                task.mark_complete()
+                if task.frequency in ("daily", "weekly"):
+                    next_task = task.next_occurrence()
+                    pet.add_task(next_task)
+                    return next_task
+                return None
+
+        return None
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks sorted chronologically by due_time using a lambda key.
+
+        Converts each due_time string (e.g. "9:00 AM") to a datetime so
+        times are compared numerically, not alphabetically. Without this,
+        "10:00 AM" would sort before "9:00 AM" because "1" < "9".
+
+        Args:
+            tasks: list of Task objects to sort (not mutated).
+
+        Returns:
+            A new list of Task objects sorted earliest due_time first.
+        """
+        def parse_time(t: Task) -> datetime:
+            try:
+                return datetime.strptime(t.due_time, "%I:%M %p")
+            except (ValueError, AttributeError):
+                return datetime.max
+
+        return sorted(tasks, key=parse_time)
+
+    def filter_tasks(
+        self,
+        completed: Optional[bool] = None,
+        pet_name: Optional[str] = None,
+    ) -> list[Task]:
+        """Filter tasks across all pets by completion status, pet name, or both.
+
+        Each argument is optional — omit it to skip that filter. Supplying
+        both narrows the result to tasks that satisfy both conditions at once.
+
+        Args:
+            completed: True  → return only completed tasks.
+                       False → return only pending (incomplete) tasks.
+                       None  → completion status is not filtered (default).
+            pet_name:  A pet's name → return only tasks belonging to that pet.
+                       None         → include tasks from all pets (default).
+
+        Returns:
+            A flat list of Task objects matching every supplied filter.
+
+        Examples:
+            scheduler.filter_tasks()                          # all tasks, all pets
+            scheduler.filter_tasks(completed=False)           # all pending tasks
+            scheduler.filter_tasks(pet_name="Mochi")          # all of Mochi's tasks
+            scheduler.filter_tasks(completed=False, pet_name="Mochi")  # Mochi's pending tasks
+        """
+        results: list[Task] = []
+        for pet in self.owner.pets:
+            if pet_name is not None and pet.name != pet_name:
+                continue
+            for task in pet.tasks:
+                if completed is not None and task.completed != completed:
+                    continue
+                results.append(task)
+        return results
+
     def explain_plan(self, pet_name: str, start_time: str = "8:00 AM") -> str:
         """Format the daily plan as a human-readable string for display.
 
-        Calls build_plan(pet_name, start_time) and joins each ScheduledTask's
-        summary() into a full schedule, e.g.:
+        Calls build_plan() and joins each ScheduledTask's summary() into a
+        printable schedule showing what is planned, what is skipped, and why.
 
+        Args:
+            pet_name:   name of the pet to build the plan for.
+            start_time: earliest time the owner is available (default "8:00 AM").
+
+        Returns:
+            A formatted multi-line string with a header and one line per task.
+
+        Example:
             Daily plan for Mochi (90 min available, starting 8:00 AM):
 
-            8:00 AM | Morning walk (20 min) [high] — High priority — scheduled at its due time.
-            9:00 AM | Give medication (10 min) [high] — High priority — scheduled at its due time.
-            SKIPPED | Enrichment play (30 min) [medium] — Not enough time remaining (5 min left, needs 30 min).
+            8:00 AM | Morning walk (20 min) [high] — High priority.
+            SKIPPED | Enrichment play (30 min) [medium] — Not enough time remaining.
         """
         plan = self.build_plan(pet_name, start_time)
 

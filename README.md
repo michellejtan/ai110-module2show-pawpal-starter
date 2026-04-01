@@ -41,3 +41,23 @@ pip install -r requirements.txt
 5. Add tests to verify key behaviors.
 6. Connect your logic to the Streamlit UI in `app.py`.
 7. Refine UML so it matches what you actually built.
+
+## Smarter Scheduling
+
+The scheduler goes beyond a basic plan — it can sort, filter, handle repeating tasks, and warn you when two things are scheduled at the same time.
+
+### Sort by time
+Tasks are automatically sorted by due time so the daily plan always reads in chronological order. If a task has a missing or unrecognized time, it gets pushed to the end instead of causing an error.
+→ `Scheduler.sort_by_time(tasks)`
+
+### Filter tasks
+You can ask for a focused view of tasks — for example, only tasks that are still pending, only tasks for a specific pet, or both at once. This makes it easy to check what still needs to be done without scrolling through everything.
+→ `Scheduler.filter_tasks(completed, pet_name)`
+
+### Recurring tasks
+Some tasks repeat every day or every week (like feeding or a morning walk). When you mark one of these complete, the scheduler automatically schedules the next occurrence on the right date — no manual re-entry needed.
+→ `Scheduler.mark_task_complete(pet_name, task_title)` · `Task.next_occurrence()`
+
+### Conflict detection
+If two tasks for the same pet are due at the same time, the scheduler catches it and prints a warning before showing the daily plan. This helps you spot and fix scheduling overlaps early.
+→ `Scheduler.find_conflicts(pet_name)` · `Scheduler.conflict_summary(pet_name)`
