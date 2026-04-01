@@ -12,6 +12,41 @@ A busy pet owner needs help staying consistent with pet care. They want an assis
 
 Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
 
+## Features
+
+### Task Management
+- **Add & remove tasks** — Assign pet care tasks (walks, feeding, medication, grooming, etc.) to any pet with title, duration, priority, due time, and frequency
+- **Priority labeling** — Each task is tagged `high`, `medium`, or `low`; a numeric priority value (`high=3`, `medium=2`, `low=1`) drives scheduling decisions
+- **Task completion** — Mark tasks done with one click; the task history is preserved and filterable
+
+### Sorting
+- **Chronological sort by time** — `Scheduler.sort_by_time()` converts 12-hour time strings (e.g. `"9:00 AM"`) to `datetime` objects before sorting, preventing the alphabetic bug where `"10:00 AM"` would appear before `"9:00 AM"`; tasks with unrecognized times are pushed safely to the end
+
+### Filtering
+- **Multi-criterion task filter** — `Scheduler.filter_tasks()` accepts an optional completion status (`True`/`False`) and an optional pet name; both filters are ANDed, so you can ask for "Mochi's pending tasks" in a single call
+
+### Conflict Detection
+- **Same-time conflict warnings** — `Scheduler.find_conflicts()` uses an O(n) hash-table scan to detect tasks sharing the same `due_time` for a given pet; conflicts are surfaced as `(task_a, task_b)` pairs and displayed in the UI with a `⚠` indicator before the schedule is generated
+- **Human-readable conflict summary** — `Scheduler.conflict_summary()` formats warnings into plain English so the user knows exactly which tasks clash
+
+### Recurring Tasks
+- **Daily & weekly recurrence** — `Task.next_occurrence()` uses Python `timedelta` arithmetic to compute the correct next date (`+1 day` for daily, `+7 days` for weekly)
+- **Auto-scheduling on completion** — When `Scheduler.mark_task_complete()` is called on a recurring task, the next occurrence is automatically created and appended to the pet's task list — no manual re-entry required
+- **Safe reset** — `Task.reset()` clears the `completed` flag on recurring tasks only; one-time tasks are left unchanged
+
+### Smart Daily Scheduling (`build_plan`)
+- **Priority-first budget allocation** — High-priority tasks claim time budget before medium and low; within the same priority, shorter tasks are scheduled first (duration as a tie-breaker)
+- **Start-time gating** — Tasks due before the owner's available start time are marked skipped with a specific reason rather than silently dropped
+- **Budget enforcement** — The scheduler tracks remaining minutes and skips any task whose duration exceeds what is left, reporting exactly how many minutes were available vs. needed
+- **Chronological output** — The final plan re-sorts all scheduled tasks by due time so the daily view always reads in order
+- **Explainable decisions** — Every `ScheduledTask` carries a `reason` string (e.g. "High priority — scheduled at its due time (45 min remaining)") so the user understands why each task was included or skipped
+
+### Multi-Pet Support
+- **Per-pet isolation** — Conflict detection and schedule generation operate on a single named pet; tasks and conflicts never bleed between pets
+- **Aggregate view** — `Owner.get_all_pending_tasks()` flattens pending tasks across all pets for a global overview
+
+---
+
 ## What you will build
 
 Your final app should:
@@ -162,6 +197,23 @@ If two tasks for the same pet are due at the same time, the scheduler catches it
 ```bash
 python -m pytest
 ```
+
+## 📸 Demo
+
+![PawPal+ Set Up](screenshots/PawPalsetup.png)
+
+![PawPal+ Task View](screenshots/PawPalTasks.png)
+
+![PawPal+ Current Task](screenshots/PawPalCurrentTask.png)
+
+![PawPal+ Generate Schedule](screenshots/PawPalGenerateSchedule.png)
+
+The app is divided into four sections:
+
+1. **Owner & Pet Setup** — Enter your name, daily time budget (in minutes), and your pet's info (name, species, age, breed). Hit "Save" to initialize your session.
+2. **Add a Task** — Fill in a task title, duration, priority (low / medium / high), due time (e.g. `9:00 AM`), and frequency (one-time, daily, or weekly). The app immediately warns you if the new task conflicts with an existing one at the same time.
+3. **Current Tasks** — View all tasks in a sortable table. Use the radio buttons to filter by All / Pending / Completed. Tasks with a scheduling conflict are flagged with a ⚠ warning. Mark any pending task complete from a dropdown — recurring tasks are automatically rescheduled.
+4. **Generate Schedule** — Enter a start time and click "Generate schedule" to see a prioritized daily plan. The output shows two tables: scheduled tasks (with time, priority, duration, and reason) and skipped tasks (with the reason they were left out).
 
 ### Overview
 
